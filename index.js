@@ -1,52 +1,48 @@
-const WebSocket = require('ws');
+const WebSocket = require("ws");
+const { v4: uuidv4 } = require("uuid");
 
-const wss = new WebSocket.Server({ port: 8080 });
-let players = [];
-let currentTurn = 0;
-let gameStarted = false;
+const server = new WebSocket.Server({ port: process.env.PORT || 3000 });
 
-wss.on('connection', (ws) => {
-    ws.on('message', (message) => {
+let games = {}; // Stores active games and players
+
+server.on("connection", (ws) => {
+    console.log("A player connected");
+
+    ws.on("message", (message) => {
         const data = JSON.parse(message);
 
-        if (data.type === 'join') {
-            if (players.length < 6) {
-                players.push({ ws, name: data.name, lives: 3 });
-                broadcast({ type: 'players', players: players.map(p => ({ name: p.name, lives: p.lives })) });
-                if (players.length > 1 && !gameStarted) startGame();
-            } else {
-                ws.send(JSON.stringify({ type: 'error', message: 'Game is full!' }));
-            }
-        } else if (data.type === 'word') {
-            handleWordSubmission(data.word);
+        if (data.type === "create-game") {
+            const gameCode = uuidv4().slice(0, 6); // Generate a 6-char game code
+            games[gameCode] = { players: [], turnIndex: 0, usedWords: new Set() };
+            ws.send(JSON.stringify({ type: "game-created", gameCode }));
         }
-    });
 
-    ws.on('close', () => {
-        players = players.filter(p => p.ws !== ws);
-        broadcast({ type: 'players', players: players.map(p => ({ name: p.name, lives: p.lives })) });
+        else if (data.type === "join-game") {
+            const { gameCode, playerName } = data;
+            if (games[gameCode]) {
+                games[gameCode].players.push({ name: playerName, ws, lives: 3 });
+                games[gameCode].players.forEach(p => p.ws.send(JSON.stringify({ type: "player-joined", players: games[gameCode].players.map(p => p.name) })));
+            } else {
+                ws.send(JSON.stringify({ type: "error", message: "Game not found" }));
+            }
+        }
+
+        else if (data.type === "submit-word") {
+            const { gameCode, word, playerName } = data;
+            if (!games[gameCode]) return;
+
+            let game = games[gameCode];
+            if (game.usedWords.has(word)) {
+                ws.send(JSON.stringify({ type: "error", message: "Word already used!" }));
+                return;
+            }
+
+            game.usedWords.add(word);
+            game.turnIndex = (game.turnIndex + 1) % game.players.length;
+
+            game.players.forEach(p => p.ws.send(JSON.stringify({ type: "next-turn", currentPlayer: game.players[game.turnIndex].name })));
+        }
     });
 });
 
-function startGame() {
-    gameStarted = true;
-    broadcast({ type: 'start' });
-    nextTurn();
-}
-
-function nextTurn() {
-    if (players.length === 0) return;
-    currentTurn = (currentTurn + 1) % players.length;
-    broadcast({ type: 'turn', name: players[currentTurn].name });
-}
-
-function handleWordSubmission(word) {
-    broadcast({ type: 'word', word });
-    nextTurn();
-}
-
-function broadcast(data) {
-    players.forEach(player => player.ws.send(JSON.stringify(data)));
-}
-
-console.log('WebSocket server running on ws://localhost:8080');
+console.log("WebSocket server running...");

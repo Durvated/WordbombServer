@@ -1,3 +1,66 @@
+const WebSocket = require('ws');
+const { v4: uuidv4 } = require('uuid');
+
+const server = new WebSocket.Server({ port: process.env.PORT || 3000 });
+
+let games = {}; // Stores active games and players
+
+server.on('connection', (ws) => {
+    console.log("A player connected");
+
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            console.log("Received message:", data);
+
+            switch (data.type) {
+                case 'createGame':
+                    handleCreateGame(ws, data);
+                    break;
+                case 'joinGame':
+                    handleJoinGame(ws, data);
+                    break;
+                case 'submitWord':
+                    handleSubmitWord(ws, data);
+                    break;
+                case 'timeOut':
+                    handleTimeOut(data);
+                    break;
+                default:
+                    console.log("Unknown message type:", data.type);
+            }
+        } catch (error) {
+            console.error("Error handling message:", error);
+        }
+    });
+
+    ws.on('close', () => {
+        handlePlayerDisconnect(ws);
+    });
+});
+
+function handleCreateGame(ws, data) {
+    const gameCode = uuidv4().slice(0, 6).toUpperCase();
+    games[gameCode] = {
+        players: [],
+        turnIndex: 0,
+        usedWords: new Set()
+    };
+    ws.send(JSON.stringify({ type: "game-created", gameCode }));
+    console.log(`Game created with code: ${gameCode}`);
+}
+
+function handleJoinGame(ws, data) {
+    const { gameCode, playerName } = data;
+    if (games[gameCode]) {
+        games[gameCode].players.push({ name: playerName, ws, lives: 3 });
+        broadcastGameState(gameCode);
+        console.log(`${playerName} joined game ${gameCode}`);
+    } else {
+        ws.send(JSON.stringify({ type: "error", message: "Game not found" }));
+    }
+}
+
 function handleSubmitWord(ws, data) {
     const { gameCode, word, playerName } = data;
     if (!games[gameCode]) return;
@@ -25,13 +88,20 @@ function handleTimeOut(data) {
 
     let game = games[gameCode];
     let currentPlayer = game.players[game.turnIndex];
+
     currentPlayer.lives--;
+    console.log(`${currentPlayer.name}'s lives reduced to ${currentPlayer.lives}`);
 
     if (currentPlayer.lives <= 0) {
-        removePlayer(gameCode, currentPlayer);
+        game.players = game.players.filter(p => p !== currentPlayer);
+        console.log(`${currentPlayer.name} has been eliminated`);
     }
 
-    nextTurn(gameCode);
+    if (game.players.length <= 1) {
+        endGame(gameCode);
+    } else {
+        nextTurn(gameCode);
+    }
 }
 
 function nextTurn(gameCode) {
@@ -43,17 +113,45 @@ function nextTurn(gameCode) {
     broadcastGameState(gameCode);
 }
 
-function removePlayer(gameCode, player) {
-    let game = games[gameCode];
-    game.players = game.players.filter(p => p !== player);
-    if (game.players.length <= 1) {
-        endGame(gameCode);
-    }
+function handlePlayerDisconnect(ws) {
+    Object.keys(games).forEach(gameCode => {
+        games[gameCode].players = games[gameCode].players.filter(p => p.ws !== ws);
+        if (games[gameCode].players.length === 0) {
+            delete games[gameCode];
+            console.log(`Game ${gameCode} removed due to no players`);
+        } else {
+            broadcastGameState(gameCode);
+        }
+    });
+}
+
+function broadcastGameState(gameCode) {
+    if (!games[gameCode]) return;
+    broadcastToGame(gameCode, {
+        type: "gameState",
+        players: games[gameCode].players.map(p => ({ name: p.name, lives: p.lives })),
+        currentIndex: games[gameCode].turnIndex
+    });
+}
+
+function broadcastToGame(gameCode, message) {
+    if (!games[gameCode]) return;
+    games[gameCode].players.forEach(player => {
+        try {
+            player.ws.send(JSON.stringify(message));
+        } catch (error) {
+            console.error("Error sending message to player:", error);
+        }
+    });
 }
 
 function endGame(gameCode) {
     let winner = games[gameCode].players[0];
-    broadcastToGame(gameCode, { type: "gameOver", winner: winner.name });
+    broadcastToGame(gameCode, {
+        type: "gameOver",
+        winner: winner.name
+    });
     delete games[gameCode];
 }
-//die
+
+console.log("WebSocket server running on port", process.env.PORT || 3000);

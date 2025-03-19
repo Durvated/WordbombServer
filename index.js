@@ -3,7 +3,17 @@ const { v4: uuidv4 } = require('uuid');
 
 const server = new WebSocket.Server({ port: process.env.PORT || 3000 });
 
-let games = {}; // Stores active games and players
+let games = {};
+
+const letterCombos = [
+    "ab", "br", "ch", "dr", "ex", "fl", "gr", "in", "kn", "li", "mi", "ne", "op", "ph", "qu", "re", "st", "th", "un", "wh",
+    "ck", "ed", "er", "es", "ic", "ing", "le", "ly", "nt", "ous", "sh",
+    "ai", "ea", "ee", "ie", "oo", "ou", "th", "qu", "zz"
+];
+
+function getRandomCombo() {
+    return letterCombos[Math.floor(Math.random() * letterCombos.length)];
+}
 
 server.on('connection', (ws) => {
     console.log("A player connected");
@@ -44,7 +54,8 @@ function handleCreateGame(ws, data) {
     games[gameCode] = {
         players: [],
         turnIndex: 0,
-        usedWords: new Set()
+        usedWords: new Set(),
+        currentCombo: getRandomCombo()
     };
     ws.send(JSON.stringify({ type: "game-created", gameCode }));
     console.log(`Game created with code: ${gameCode}`);
@@ -75,6 +86,11 @@ function handleSubmitWord(ws, data) {
 
     if (game.usedWords.has(word)) {
         ws.send(JSON.stringify({ type: "error", message: "Word already used!" }));
+        return;
+    }
+
+    if (!word.includes(game.currentCombo)) {
+        ws.send(JSON.stringify({ type: "error", message: `Word must contain '${game.currentCombo}'!` }));
         return;
     }
 
@@ -110,6 +126,7 @@ function nextTurn(gameCode) {
         game.turnIndex = (game.turnIndex + 1) % game.players.length;
     } while (game.players[game.turnIndex].lives <= 0);
 
+    game.currentCombo = getRandomCombo();
     broadcastGameState(gameCode);
 }
 
@@ -130,7 +147,8 @@ function broadcastGameState(gameCode) {
     broadcastToGame(gameCode, {
         type: "gameState",
         players: games[gameCode].players.map(p => ({ name: p.name, lives: p.lives })),
-        currentIndex: games[gameCode].turnIndex
+        currentIndex: games[gameCode].turnIndex,
+        currentCombo: games[gameCode].currentCombo
     });
 }
 

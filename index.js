@@ -56,3 +56,4 @@ function endGame(gameCode) {
     broadcastToGame(gameCode, { type: "gameOver", winner: winner.name });
     delete games[gameCode];
 }
+//die
